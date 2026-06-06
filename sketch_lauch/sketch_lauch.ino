@@ -71,7 +71,7 @@ void loop() {
     display.print("1x: ");
     display.println(pos1x);
     display.display();
-  }
+  } 
 
   // --- Gestione pulsante
   bool pressed = !digitalRead(PIN_SW);
