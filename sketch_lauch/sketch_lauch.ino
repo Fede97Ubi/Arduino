@@ -2,7 +2,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Encoder.h>
-#include <DHT.h> // Libreria per il sensore di temperatura e umidità
+#include <DHT.h> 
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -14,8 +14,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 #define PIN_SW  4
 
 // Pin e Tipo DHT (Termometro)
-#define DHTPIN 5      // Collegato al foro numero 5 dell'Arduino
-#define DHTTYPE DHT11 // Modello del sensore
+#define DHTPIN 5      
+#define DHTTYPE DHT11 
 DHT dht(DHTPIN, DHTTYPE);
 
 Encoder enc(PIN_CLK, PIN_DT);
@@ -23,120 +23,196 @@ Encoder enc(PIN_CLK, PIN_DT);
 long lastPos4x = -999;
 long lastPos1x = 0;
 unsigned long lastButtonPress = 0;
-const unsigned long debounceDelay = 50;
+const unsigned long debounceDelay = 250; 
 
-// Tempistiche per leggere il termometro senza bloccare la manopola
+// --- VARIABILE PER GESTIONE PAGINE ---
+int paginaCorrente = 0; 
+const int TOTALE_PAGINE = 2;
+
+// --- MEMORIZZAZIONE DATI GRAFICO ---
+const int MAX_PUNTI = 30; 
+float storiciTemperatura[MAX_PUNTI];
+int puntiMemorizzati = 0;
+
+float temperaturaAttuale = 0.0;
+float umiditaAttuale = 0.0;
+
+// Tempistiche
 unsigned long previousMillisDHT = 0;
-const long intervalDHT = 2000; // Il DHT11 è lento, lo leggiamo ogni 2 secondi
+const long intervalDHT = 2000; 
+
+unsigned long previousMillisGrafico = 0;
+const long intervalGrafico = 10000; // 10 secondi
+
+void aggiungiDatoGrafico(float nuovaTemp) {
+  if (puntiMemorizzati < MAX_PUNTI) {
+    storiciTemperatura[puntiMemorizzati] = nuovaTemp;
+    puntiMemorizzati++;
+  } else {
+    for (int i = 0; i < MAX_PUNTI - 1; i++) {
+      storiciTemperatura[i] = storiciTemperatura[i + 1];
+    }
+    storiciTemperatura[MAX_PUNTI - 1] = nuovaTemp;
+  }
+}
 
 void setup() {
   Serial.begin(9600);
   delay(2000);
 
-  // Inizializzazione Display
   Wire.begin();
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("Errore OLED"));
     while (true);
   }
 
-  // Inizializzazione Termometro
   dht.begin();
 
+  for (int i = 0; i < MAX_PUNTI; i++) {
+    storiciTemperatura[i] = 0.0;
+  }
+
   display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("Sistema Pronto!");
   display.display();
 
   pinMode(PIN_SW, INPUT_PULLUP);
 }
 
 void loop() {
-  // --- Lettura Encoder 4x
-  long pos4x = enc.read();
-  if (pos4x != lastPos4x) {
-    lastPos4x = pos4x;
-    Serial.print("4x Encoder: ");
-    Serial.println(pos4x);
-
-    display.setCursor(0, 10);
-    display.fillRect(0, 10, SCREEN_WIDTH, 10, SSD1306_BLACK);
-    display.print("4x: ");
-    display.println(pos4x);
-    display.display();
-  }
-
-  // --- Lettura Encoder 1x
-  long pos1x = pos4x / 4; 
-  if (pos1x != lastPos1x) {
-    lastPos1x = pos1x;
-    Serial.print("1x Encoder: ");
-    Serial.println(pos1x);
-
-    display.setCursor(0, 20);
-    display.fillRect(0, 20, SCREEN_WIDTH, 10, SSD1306_BLACK);
-    display.print("1x: ");
-    display.println(pos1x);
-    display.display();
-  }
-
-  // --- Gestione pulsante (Click)
-  bool pressed = !digitalRead(PIN_SW);
-  if (pressed && (millis() - lastButtonPress > debounceDelay)) {
-    lastButtonPress = millis();
-    Serial.println("Click!");
-    display.setCursor(0, 30);
-    display.fillRect(0, 30, SCREEN_WIDTH, 10, SSD1306_BLACK);
-    display.print("Click!");
-    display.display();
-  }
-
-  // --- Gestione Lettura Termometro (Ogni 2 secondi)
   unsigned long currentMillis = millis();
+
+  // --- Gestione cambio pagina col Pulsante
+  bool pressed = !digitalRead(PIN_SW);
+  if (pressed && (currentMillis - lastButtonPress > debounceDelay)) {
+    lastButtonPress = currentMillis;
+    paginaCorrente = (paginaCorrente + 1) % TOTALE_PAGINE;
+    display.clearDisplay(); // Pulizia totale dello schermo al cambio pagina
+    display.display();
+  }
+
+  // --- Lettura Encoder (Aggiorna le variabili, ma stampa solo se siamo in Pagina 0)
+  long pos4x = enc.read();
+  long pos1x = pos4x / 4; 
+
+  // --- Gestione Lettura Sensore (Ogni 2 secondi)
   if (currentMillis - previousMillisDHT >= intervalDHT) {
     previousMillisDHT = currentMillis;
-
-    // Leggiamo i dati dal sensore
-    float umidita = dht.readHumidity();
-    float temperatura = dht.readTemperature();
-
-    // Verifichiamo se il sensore sta rispondendo correttamente
-    if (isnan(umidita) || isnan(temperatura)) {
-      Serial.println(F("Errore di lettura dal DHT11!"));
-      
-      // Scriviamo l'errore sul display per avvisarti
-      display.fillRect(0, 45, SCREEN_WIDTH, 19, SSD1306_BLACK);
-      display.setCursor(0, 45);
-      display.print("Sensore: ERRORE");
-      display.display();
-    } else {
-      // Se è tutto a posto, stampiamo i dati anche sul PC
-      Serial.print(F("Umidita': "));
-      Serial.print(umidita);
-      Serial.print(F("%  Temperatura: "));
-      Serial.print(temperatura);
-      Serial.println(F("°C"));
-
-      // Puliamo solo la parte bassa dello schermo per non cancellare l'encoder
-      display.fillRect(0, 45, SCREEN_WIDTH, 19, SSD1306_BLACK); 
-      
-      // Mostriamo la Temperatura alla riga 45
-      display.setCursor(0, 45);
-      display.print("Temp: ");
-      display.print(temperatura, 1); // Mostra il valore con un solo decimale
-      display.print(" C");
-
-      // Mostriamo l'Umidità alla riga 55
-      display.setCursor(0, 55);
-      display.print("Umid: ");
-      display.print(umidita, 0);     // Mostra il valore intero senza decimali
-      display.print(" %");
-      
-      display.display(); // Aggiorna lo schermo con i nuovi dati
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    if (!isnan(t) && !isnan(h)) {
+      temperaturaAttuale = t;
+      umiditaAttuale = h;
     }
   }
 
-  delay(1); // loop velocissimo per non perdere i passi della manopola
+  // --- Gestione Salvataggio Storico (Ogni 10 secondi)
+  if (currentMillis - previousMillisGrafico >= intervalGrafico) {
+    previousMillisGrafico = currentMillis;
+    if (temperaturaAttuale != 0.0) {
+      aggiungiDatoGrafico(temperaturaAttuale);
+    }
+  }
+
+  // ========================================================
+  // RENDERING DELLE SCHERMATE
+  // ========================================================
+  
+  if (paginaCorrente == 0) {
+    // --------------------------------------------------------
+    // PAGINA 1: INTERFACCIA COMPLETA (Encoder in alto + Meteo in basso)
+    // --------------------------------------------------------
+    display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
+    
+    // Mostra dati Encoder
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.print("4x: "); display.println(pos4x);
+    display.setCursor(0, 10);
+    display.print("1x: "); display.println(pos1x);
+    
+    // Linea di divisione interna
+    display.drawFastHLine(0, 24, SCREEN_WIDTH, SSD1306_WHITE);
+
+    // Mostra dati Termometro
+    display.setCursor(0, 32);
+    display.print("Temp: ");
+    display.print(temperaturaAttuale, 1); 
+    display.print(" C");
+
+    display.setCursor(0, 48);
+    display.print("Umid: ");
+    display.print(umiditaAttuale, 0);     
+    display.print(" %");
+    
+    display.display(); 
+    lastPos4x = pos4x; // Sincronizza per evitare refusi
+  }
+  else if (paginaCorrente == 1) {
+    // --------------------------------------------------------
+    // PAGINA 2: SOLO GRAFICO A TUTTO SCHERMO (0-64 pixel verticali)
+    // --------------------------------------------------------
+    display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
+
+    // Nuovi Assi massimizzati per l'intero display
+    // Asse Y verticale spostato in alto (X=14, da Y=4 a Y=58 -> alto 54 pixel!)
+    display.drawFastVLine(14, 4, 54, SSD1306_WHITE);
+    // Asse X orizzontale in basso a pixel Y=58
+    display.drawFastHLine(14, 58, 110, SSD1306_WHITE);
+
+    if (puntiMemorizzati == 0) {
+      display.setTextSize(1);
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(30, 28);
+      display.print("Campionamento...");
+      display.display();
+    } 
+    else {
+      // Calcolo dinamico scala Y
+      float tempMin = 100.0;
+      float tempMax = -100.0;
+      for (int i = 0; i < puntiMemorizzati; i++) {
+        if (storiciTemperatura[i] < tempMin) tempMin = storiciTemperatura[i];
+        if (storiciTemperatura[i] > tempMax) tempMax = storiciTemperatura[i];
+      }
+      
+      if (tempMax == tempMin) {
+        tempMax += 1.0;
+        tempMin -= 1.0;
+      }
+
+      // Stampiamo i valori di Max (in alto a Y=4) e Min (in basso a Y=48) di fianco all'asse Y
+      display.setTextSize(1);
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(0, 4);   display.print((int)tempMax);
+      display.setCursor(0, 48);  display.print((int)tempMin);
+
+      // Spazio orizzontale asse X (110 pixel totali per 30 punti)
+      float spazioX = 110.0 / (MAX_PUNTI - 1);
+      int altezzaGraficoMax = 50; // Alveo verticale aumentato a 50 pixel per massima definizione!
+
+      int prevX = 0;
+      int prevY = 0;
+
+      for (int i = 0; i < puntiMemorizzati; i++) {
+        int x_pixel = 14 + (int)(i * spazioX);
+        
+        float percentuale = (storiciTemperatura[i] - tempMin) / (tempMax - tempMin);
+        // Mappatura dentro l'altezza aumentata (da Y=57 scendendo verso l'alto)
+        int y_pixel = 57 - (int)(percentuale * altezzaGraficoMax);
+
+        display.drawPixel(x_pixel, y_pixel, SSD1306_WHITE);
+
+        if (i > 0) {
+          display.drawLine(prevX, prevY, x_pixel, y_pixel, SSD1306_WHITE);
+        }
+
+        prevX = x_pixel;
+        prevY = y_pixel;
+      }
+      display.display();
+    }
+  }
+
+  delay(1); 
 }
