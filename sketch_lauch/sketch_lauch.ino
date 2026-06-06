@@ -29,16 +29,16 @@ const unsigned long debounceDelay = 250;
 int paginaCorrente = 0; 
 const int TOTALE_PAGINE = 2;
 
-// --- MEMORIZZAZIONE DATI GRAFICO ---
-const int MAX_PUNTI = 30; 
+// --- MEMORIZZAZIONE DATI GRAFICO AUMENTATA A 50 PUNTI ---
+const int MAX_PUNTI = 50; 
 float storiciTemperatura[MAX_PUNTI];
 int puntiMemorizzati = 0;
 
 float temperaturaAttuale = 0.0;
 float umiditaAttuale = 0.0;
 
-// --- GESTIONE ZOOM INTERATTIVO ---
-int rangeGradiY = 5; 
+// --- GESTIONE ZOOM INTERATTIVO BILANCIATO ---
+int rangeGradiY = 10; 
 long vecchiaPosizioneEncoderGrafico = 0;
 
 // Tempistiche
@@ -46,7 +46,7 @@ unsigned long previousMillisDHT = 0;
 const long intervalDHT = 2000; 
 
 unsigned long previousMillisGrafico = 0;
-const long intervalGrafico = 10000; 
+const long intervalGrafico = 10000; // 10 secondi
 
 int getRamLibera() {
   extern int __heap_start, *__brkval;
@@ -103,6 +103,7 @@ void loop() {
     }
     
     display.clearDisplay(); 
+    display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK);
     display.display();
   }
 
@@ -145,15 +146,15 @@ void loop() {
   // ========================================================
   
   if (paginaCorrente == 0) {
-    // PAGINA 1: ENCODER + RAM + METEO
+    // PAGINA 1: INTERFACCIA PULITA
     display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     
     display.setCursor(0, 0);
-    display.print("4x: "); display.print(pos4x);
+    display.print(F("4x: ")); display.print(pos4x);
     display.setCursor(0, 12);
-    display.print("1x: "); display.print(pos1x);
+    display.print(F("1x: ")); display.print(pos1x);
     
     display.drawFastVLine(64, 0, 22, SSD1306_WHITE);
 
@@ -162,77 +163,73 @@ void loop() {
     int ramOccupata = ramTotale - ramLibera;
 
     display.setCursor(68, 0);
-    display.print("RAM:");
+    display.print(F("RAM:"));
     display.setCursor(68, 12);
     display.print(ramOccupata);
-    display.print("/");
+    display.print(F("/"));
     display.print(ramTotale);
-    display.print("B");
+    display.print(F("B"));
     
     display.drawFastHLine(0, 24, SCREEN_WIDTH, SSD1306_WHITE);
 
     display.setCursor(0, 32);
-    display.print("Temp: ");
+    display.print(F("Temp: "));
     display.print(temperaturaAttuale, 1); 
-    display.print(" C");
+    display.print(F(" C"));
 
     display.setCursor(0, 48);
-    display.print("Umid: ");
+    display.print(F("Umid: "));
     display.print(umiditaAttuale, 0);     
-    display.print(" %");
+    display.print(F(" %"));
     
     display.display(); 
     lastPos4x = pos4x; 
   }
   else if (paginaCorrente == 1) {
-    // PAGINA 2: GRAFICO INTERATTIVO MASSIMIZZATO (A TUTTO SCHERMO)
+    // PAGINA 2: GRAFICO CON CENTRATURA AD INTERI SIMMETRICA
     display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
-
-    // Assi attaccati ai bordi esterni:
-    // Asse Y verticale a sinistra (X=12, si estende da Y=0 a Y=63)
-    display.drawFastVLine(12, 0, 64, SSD1306_WHITE);
-    // Asse X orizzontale esattamente sull'ultimo pixel in basso (Y=63, si estende fino a X=127)
-    display.drawFastHLine(12, 63, 116, SSD1306_WHITE);
 
     if (puntiMemorizzati == 0) {
       display.setTextSize(1);
       display.setTextColor(SSD1306_WHITE);
-      display.setCursor(35, 28);
-      display.print("loading...");
+      display.setCursor(40, 28);
+      display.print(F("Raccolta..."));
       display.display();
     } 
     else {
-      float metaRange = (float)rangeGradiY / 2.0;
-      float tempMax = temperaturaAttuale + metaRange;
-      float tempMin = temperaturaAttuale - metaRange;
+      float somma = 0.0;
+      for (int i = 0; i < puntiMemorizzati; i++) {
+        somma += storiciTemperatura[i];
+      }
+      
+      float mediaDati = somma / (float)puntiMemorizzati;
+      
+      int centroIntero = (int)mediaDati;
 
-      // Testi dei gradi attaccati all'asse Y (colonna X=0)
-      display.setTextSize(1);
-      display.setTextColor(SSD1306_WHITE);
-      display.setCursor(0, 0);   display.print((int)tempMax);
-      display.setCursor(0, 54);  display.print((int)tempMin);
+      int metaSotto = rangeGradiY / 2;
+      int metaSopra = rangeGradiY - metaSotto; 
 
-      // Indicatore del range ("R:X") spostato nell'angolo in alto a destra estremo (X=102, Y=0)
-      display.setCursor(102, 0);
-      display.print("R:"); display.print(rangeGradiY);
+      int tempMinIntera = centroIntero - metaSotto;
+      int tempMaxIntera = centroIntero + metaSopra;
 
-      // Calcolo coordinate (Larghezza utile estesa a 115 pixel, altezza utile estesa a 63 pixel)
-      float spazioX = 115.0 / (MAX_PUNTI - 1);
-      int altezzaGraficoMax = 63; 
+      float limiteY_Min = (float)tempMinIntera;
+      float limiteY_Max = (float)tempMaxIntera;
+
+      float spazioX = 102.0 / (MAX_PUNTI - 1);
+      int altezzaGraficoMax = 61; 
 
       int prevX = 0;
       int prevY = 0;
 
       for (int i = 0; i < puntiMemorizzati; i++) {
-        int x_pixel = 12 + (int)(i * spazioX);
+        int x_pixel = 26 + (int)(i * spazioX);
         
-        float percentuale = (storiciTemperatura[i] - tempMin) / (tempMax - tempMin);
+        float percentuale = (storiciTemperatura[i] - limiteY_Min) / (limiteY_Max - limiteY_Min);
         
         if (percentuale > 1.0) percentuale = 1.0;
         if (percentuale < 0.0) percentuale = 0.0;
 
-        // Mappatura che sfrutta l'intera altezza (da Y=62 a scendere verso Y=0)
-        int y_pixel = 62 - (int)(percentuale * altezzaGraficoMax);
+        int y_pixel = 61 - (int)(percentuale * altezzaGraficoMax);
 
         display.drawPixel(x_pixel, y_pixel, SSD1306_WHITE);
 
@@ -243,9 +240,28 @@ void loop() {
         prevX = x_pixel;
         prevY = y_pixel;
       }
+
+      display.fillRect(0, 0, 26, 64, SSD1306_BLACK); 
+
+      display.drawFastVLine(26, 0, 64, SSD1306_WHITE); 
+      display.drawFastHLine(26, 63, 102, SSD1306_WHITE); 
+
+      display.setTextSize(1);
+      display.setTextColor(SSD1306_WHITE);
+      
+      display.setCursor(0, 0);   display.print(tempMaxIntera);  
+      display.setCursor(0, 54);  display.print(tempMinIntera);  
+
+      display.setCursor(102, 0);
+      display.print(F("R:")); display.print(rangeGradiY);
+
       display.display();
     }
   }
 
-  delay(1); 
+  if (paginaCorrente == 0) {
+    delay(33); 
+  } else {
+    delay(1);
+  }
 }
