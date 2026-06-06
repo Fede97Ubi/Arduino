@@ -37,6 +37,10 @@ int puntiMemorizzati = 0;
 float temperaturaAttuale = 0.0;
 float umiditaAttuale = 0.0;
 
+// --- GESTIONE ZOOM INTERATTIVO ---
+int rangeGradiY = 5; 
+long vecchiaPosizioneEncoderGrafico = 0;
+
 // Tempistiche
 unsigned long previousMillisDHT = 0;
 const long intervalDHT = 2000; 
@@ -44,7 +48,6 @@ const long intervalDHT = 2000;
 unsigned long previousMillisGrafico = 0;
 const long intervalGrafico = 10000; 
 
-// Funzione sicura per calcolare la RAM libera rimasta nell'ATmega328P
 int getRamLibera() {
   extern int __heap_start, *__brkval;
   int v;
@@ -93,13 +96,30 @@ void loop() {
   if (pressed && (currentMillis - lastButtonPress > debounceDelay)) {
     lastButtonPress = currentMillis;
     paginaCorrente = (paginaCorrente + 1) % TOTALE_PAGINE;
+    
+    if (paginaCorrente == 1) {
+      enc.write(rangeGradiY * 4); 
+      vecchiaPosizioneEncoderGrafico = rangeGradiY;
+    }
+    
     display.clearDisplay(); 
     display.display();
   }
 
-  // --- Lettura Encoder
+  // --- Lettura Encoder per la Pagina 1
   long pos4x = enc.read();
   long pos1x = pos4x / 4; 
+
+  // --- Controllo Zoom in Pagina 2
+  if (paginaCorrente == 1) {
+    if (pos1x != vecchiaPosizioneEncoderGrafico) {
+      if (pos1x < 1) { pos1x = 1; enc.write(4); }
+      if (pos1x > 20) { pos1x = 20; enc.write(80); }
+      
+      rangeGradiY = pos1x;
+      vecchiaPosizioneEncoderGrafico = pos1x;
+    }
+  }
 
   // --- Gestione Lettura Sensore (Ogni 2 secondi)
   if (currentMillis - previousMillisDHT >= intervalDHT) {
@@ -125,26 +145,20 @@ void loop() {
   // ========================================================
   
   if (paginaCorrente == 0) {
-    // --------------------------------------------------------
-    // PAGINA 1: ENCODER (SX) + MEMORIA RAM (DX) + METEO (BASSO)
-    // --------------------------------------------------------
+    // PAGINA 1: ENCODER + RAM + METEO
     display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
-    
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     
-    // --- LATO SINISTRO: Giri Manopola (fino a colonna X = 60)
     display.setCursor(0, 0);
     display.print("4x: "); display.print(pos4x);
     display.setCursor(0, 12);
     display.print("1x: "); display.print(pos1x);
     
-    // --- LINEA VERTICALE DI DIVISIONE (A metà schermo, X = 64, alta da Y=0 a Y=22)
     display.drawFastVLine(64, 0, 22, SSD1306_WHITE);
 
-    // --- LATO DESTRO: Controllo Memoria RAM (da colonna X = 68)
     int ramLibera = getRamLibera();
-    int ramTotale = 2048; // 2KB di RAM totali sul Pro Mini
+    int ramTotale = 2048; 
     int ramOccupata = ramTotale - ramLibera;
 
     display.setCursor(68, 0);
@@ -155,10 +169,8 @@ void loop() {
     display.print(ramTotale);
     display.print("B");
     
-    // --- LINEA ORIZZONTALE DI DIVISIONE GENERALE (A pixel Y = 24)
     display.drawFastHLine(0, 24, SCREEN_WIDTH, SSD1306_WHITE);
 
-    // --- PARTE BASSA: Termometro
     display.setCursor(0, 32);
     display.print("Temp: ");
     display.print(temperaturaAttuale, 1); 
@@ -173,49 +185,54 @@ void loop() {
     lastPos4x = pos4x; 
   }
   else if (paginaCorrente == 1) {
-    // --------------------------------------------------------
-    // PAGINA 2: SOLO GRAFICO A TUTTO SCHERMO
-    // --------------------------------------------------------
+    // PAGINA 2: GRAFICO INTERATTIVO MASSIMIZZATO (A TUTTO SCHERMO)
     display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
 
-    display.drawFastVLine(14, 4, 54, SSD1306_WHITE);
-    display.drawFastHLine(14, 58, 110, SSD1306_WHITE);
+    // Assi attaccati ai bordi esterni:
+    // Asse Y verticale a sinistra (X=12, si estende da Y=0 a Y=63)
+    display.drawFastVLine(12, 0, 64, SSD1306_WHITE);
+    // Asse X orizzontale esattamente sull'ultimo pixel in basso (Y=63, si estende fino a X=127)
+    display.drawFastHLine(12, 63, 116, SSD1306_WHITE);
 
     if (puntiMemorizzati == 0) {
       display.setTextSize(1);
       display.setTextColor(SSD1306_WHITE);
-      display.setCursor(30, 28);
-      display.print("Campionamento...");
+      display.setCursor(35, 28);
+      display.print("loading...");
       display.display();
     } 
     else {
-      float tempMin = 100.0;
-      float tempMax = -100.0;
-      for (int i = 0; i < puntiMemorizzati; i++) {
-        if (storiciTemperatura[i] < tempMin) tempMin = storiciTemperatura[i];
-        if (storiciTemperatura[i] > tempMax) tempMax = storiciTemperatura[i];
-      }
-      
-      if (tempMax == tempMin) {
-        tempMax += 1.0;
-        tempMin -= 1.0;
-      }
+      float metaRange = (float)rangeGradiY / 2.0;
+      float tempMax = temperaturaAttuale + metaRange;
+      float tempMin = temperaturaAttuale - metaRange;
 
+      // Testi dei gradi attaccati all'asse Y (colonna X=0)
       display.setTextSize(1);
       display.setTextColor(SSD1306_WHITE);
-      display.setCursor(0, 4);   display.print((int)tempMax);
-      display.setCursor(0, 48);  display.print((int)tempMin);
+      display.setCursor(0, 0);   display.print((int)tempMax);
+      display.setCursor(0, 54);  display.print((int)tempMin);
 
-      float spazioX = 110.0 / (MAX_PUNTI - 1);
-      int altezzaGraficoMax = 50; 
+      // Indicatore del range ("R:X") spostato nell'angolo in alto a destra estremo (X=102, Y=0)
+      display.setCursor(102, 0);
+      display.print("R:"); display.print(rangeGradiY);
+
+      // Calcolo coordinate (Larghezza utile estesa a 115 pixel, altezza utile estesa a 63 pixel)
+      float spazioX = 115.0 / (MAX_PUNTI - 1);
+      int altezzaGraficoMax = 63; 
 
       int prevX = 0;
       int prevY = 0;
 
       for (int i = 0; i < puntiMemorizzati; i++) {
-        int x_pixel = 14 + (int)(i * spazioX);
+        int x_pixel = 12 + (int)(i * spazioX);
+        
         float percentuale = (storiciTemperatura[i] - tempMin) / (tempMax - tempMin);
-        int y_pixel = 57 - (int)(percentuale * altezzaGraficoMax);
+        
+        if (percentuale > 1.0) percentuale = 1.0;
+        if (percentuale < 0.0) percentuale = 0.0;
+
+        // Mappatura che sfrutta l'intera altezza (da Y=62 a scendere verso Y=0)
+        int y_pixel = 62 - (int)(percentuale * altezzaGraficoMax);
 
         display.drawPixel(x_pixel, y_pixel, SSD1306_WHITE);
 
