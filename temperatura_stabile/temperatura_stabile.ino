@@ -36,7 +36,6 @@ int puntiMemorizzati = 0;
 
 float temperaturaAttuale = 0.0;
 float umiditaAttuale = 0.0;
-float percepitaAttuale = 0.0; // Nuova variabile per la temperatura percepita
 
 // --- GESTIONE ZOOM INTERATTIVO BILANCIATO ---
 int rangeGradiY = 10; 
@@ -72,36 +71,45 @@ int displayMin = 0;
 int displayMax = 0;
 
 void calcolaLimitiSmart(float* buffer, int nPunti, int rangeY, float lastVal) {
-  int minOccupato = (int)floor(lastVal);
-  int maxOccupato = (int)ceil(lastVal);
+	// 1. Inizializziamo il range minimo necessario con l'ultimo valore
+	// Un 21.1 occupa da 21 a 22 (floor e ceil)
+	int minOccupato = (int)floor(lastVal);
+	int maxOccupato = (int)ceil(lastVal);
 
-  for (int i = nPunti - 2; i >= 0; i--) {
-      float val = buffer[i];
-      int valMin = (int)floor(val);
-      int valMax = (int)ceil(val);
+	// 2. Andiamo a ritroso nel buffer
+	for (int i = nPunti - 2; i >= 0; i--) {
+			float val = buffer[i];
+			int valMin = (int)floor(val);
+			int valMax = (int)ceil(val);
 
-      int newMin = min(minOccupato, valMin);
-      int newMax = max(maxOccupato, valMax);
+			// Calcoliamo come cambierebbe il range includendo questo nuovo punto
+			int newMin = min(minOccupato, valMin);
+			int newMax = max(maxOccupato, valMax);
 
-      if ((newMax - newMin) <= rangeY) {
-          minOccupato = newMin;
-          maxOccupato = newMax;
-      } else {
-          break;
-      }
-  }
+			// Se l'ingombro totale entra nel rangeGradiY, lo includiamo
+			if ((newMax - newMin) <= rangeY) {
+					minOccupato = newMin;
+					maxOccupato = newMax;
+			} else {
+					// Se sforiamo, ci fermiamo: questo punto (e tutti i precedenti) sono esclusi
+					break;
+			}
+	}
 
-  int spanAttuale = maxOccupato - minOccupato;
-  int espansioneNecessaria = rangeY - spanAttuale;
+	// 3. Ora abbiamo il range "stretto". Espandiamolo per occupare tutto rangeY
+	int spanAttuale = maxOccupato - minOccupato;
+	int espansioneNecessaria = rangeY - spanAttuale;
 
-  if (espansioneNecessaria > 0) {
-      int metaEspansione = espansioneNecessaria / 2;
-      minOccupato -= metaEspansione;
-      maxOccupato = minOccupato + rangeY;
-  }
+	if (espansioneNecessaria > 0) {
+			// Espandiamo simmetricamente (o quanto possibile)
+			int metaEspansione = espansioneNecessaria / 2;
+			minOccupato -= metaEspansione;
+			maxOccupato = minOccupato + rangeY;
+	}
 
-  displayMin = minOccupato;
-  displayMax = maxOccupato;
+	// Salviamo per il rendering
+	displayMin = minOccupato;
+	displayMax = maxOccupato;
 }
 
 void setup() {
@@ -168,8 +176,6 @@ void loop() {
     if (!isnan(t) && !isnan(h)) {
       temperaturaAttuale = t;
       umiditaAttuale = h;
-      // Calcolo dell'indice di calore (percepita) in gradi Celsius
-      percepitaAttuale = dht.computeHeatIndex(t, h, false);
     }
   }
 
@@ -186,7 +192,7 @@ void loop() {
   // ========================================================
   
   if (paginaCorrente == 0) {
-    // PAGINA 1: INTERFACCIA PULITA E AGGIORNATA
+    // PAGINA 1: INTERFACCIA PULITA
     display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
@@ -212,38 +218,21 @@ void loop() {
     
     display.drawFastHLine(0, 24, SCREEN_WIDTH, SSD1306_WHITE);
 
-    // Blocco Dati Sensore (Sinistra)
     display.setCursor(0, 32);
     display.print(F("Temp: "));
     display.print(temperaturaAttuale, 1); 
     display.print(F(" C"));
 
-    display.setCursor(0, 44);
+    display.setCursor(0, 48);
     display.print(F("Umid: "));
     display.print(umiditaAttuale, 0);     
     display.print(F(" %"));
-
-    display.setCursor(0, 56);
-    display.print(F("Perc: "));
-    display.print(percepitaAttuale, 1);     
-    display.print(F(" C"));
-
-    // Separatore verticale interno per i dati diagnostici in basso
-    display.drawFastVLine(78, 28, 36, SSD1306_WHITE);
-
-    // Info Diagnostica / Uptime (Destra)
-    unsigned long secondiUp = currentMillis / 1000;
-    display.setCursor(84, 36);
-    display.print(F("UPTIME"));
-    display.setCursor(84, 48);
-    display.print(secondiUp);
-    display.print(F("s"));
     
     display.display(); 
     lastPos4x = pos4x; 
   }
   else if (paginaCorrente == 1) {
-    // PAGINA 2: GRAFICO (INALTERATO, FUNZIONANTE)
+    // PAGINA 2: GRAFICO CON CENTRATURA AD INTERI SIMMETRICA
     display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
 
     if (puntiMemorizzati == 0) {
@@ -254,10 +243,12 @@ void loop() {
       display.display();
     } 
     else {
-      calcolaLimitiSmart(storiciTemperatura, puntiMemorizzati, rangeGradiY, storiciTemperatura[puntiMemorizzati - 1]);
-      
-      float limiteY_Min = (float)displayMin;
-      float limiteY_Max = (float)displayMax;
+			// Passiamo tutto l'array, quanti punti abbiamo, il range dell'encoder e l'ultimo valore
+			calcolaLimitiSmart(storiciTemperatura, puntiMemorizzati, rangeGradiY, storiciTemperatura[puntiMemorizzati - 1]);
+			
+			// Ora usa displayMin e displayMax per il rendering
+			float limiteY_Min = (float)displayMin;
+			float limiteY_Max = (float)displayMax;
 
       float spazioX = 102.0 / (MAX_PUNTI - 1);
       int altezzaGraficoMax = 61; 
@@ -292,9 +283,9 @@ void loop() {
 
       display.setTextSize(1);
       display.setTextColor(SSD1306_WHITE);
-      
+			
       display.setCursor(0, 0);   display.print(displayMax);  
-      display.setCursor(0, 54);  display.print(displayMin);
+    	display.setCursor(0, 54);  display.print(displayMin);
 
       display.setCursor(102, 0);
       display.print(F("R:")); display.print(rangeGradiY);
