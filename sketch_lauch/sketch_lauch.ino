@@ -25,20 +25,23 @@ long lastPos1x = 0;
 unsigned long lastButtonPress = 0;
 const unsigned long debounceDelay = 250; 
 
-// --- VARIABILE PER GESTIONE PAGINE ---
-int paginaCorrente = 0; 
-const int TOTALE_PAGINE = 2;
+// Stato del pulsante per logica di rilascio
+bool lastButtonState = false; 
 
-// --- MEMORIZZAZIONE DATI GRAFICO AUMENTATA A 50 PUNTI ---
+// --- GESTIONE PAGINE ---
+int paginaCorrente = 0; 
+const int TOTALE_PAGINE = 3; 
+
+// --- MEMORIZZAZIONE DATI GRAFICO ---
 const int MAX_PUNTI = 50; 
 float storiciTemperatura[MAX_PUNTI];
 int puntiMemorizzati = 0;
 
 float temperaturaAttuale = 0.0;
 float umiditaAttuale = 0.0;
-float percepitaAttuale = 0.0; // Nuova variabile per la temperatura percepita
+float percepitaAttuale = 0.0; 
 
-// --- GESTIONE ZOOM INTERATTIVO BILANCIATO ---
+// --- GESTIONE ZOOM INTERATTIVO ---
 int rangeGradiY = 10; 
 long vecchiaPosizioneEncoderGrafico = 0;
 
@@ -47,7 +50,22 @@ unsigned long previousMillisDHT = 0;
 const long intervalDHT = 2000; 
 
 unsigned long previousMillisGrafico = 0;
-const long intervalGrafico = 10000; // 10 secondi
+const long intervalGrafico = 10000; 
+
+// --- STATI ESPRESSIONI OCCHI ---
+#define OCCHI_NORMALI 0
+#define OCCHI_BLINK   1
+#define OCCHI_SINISTRA 2
+#define OCCHI_DESTRA   3
+#define OCCHI_FELICE   4
+#define OCCHI_ARRABBIATO 5
+
+unsigned long tempoUltimoStatoOcchi = 0;
+int statoOcchiAttuale = OCCHI_NORMALI;
+unsigned long durataStatoOcchi = 2000; 
+
+int displayMin = 0;
+int displayMax = 0;
 
 int getRamLibera() {
   extern int __heap_start, *__brkval;
@@ -66,10 +84,6 @@ void aggiungiDatoGrafico(float nuovaTemp) {
     storiciTemperatura[MAX_PUNTI - 1] = nuovaTemp;
   }
 }
-
-// Variabili globali per memorizzare i limiti attuali
-int displayMin = 0;
-int displayMax = 0;
 
 void calcolaLimitiSmart(float* buffer, int nPunti, int rangeY, float lastVal) {
   int minOccupato = (int)floor(lastVal);
@@ -106,11 +120,16 @@ void calcolaLimitiSmart(float* buffer, int nPunti, int rangeY, float lastVal) {
 
 void setup() {
   Serial.begin(9600);
-  delay(2000);
+  delay(1000); 
+
+  Serial.println(F("====================================="));
+  Serial.println(F("[SISTEMA] Arduino avviato correttamente!"));
+  Serial.print(F("[INFO] Pagine totali configurate: ")); Serial.println(TOTALE_PAGINE);
+  Serial.println(F("====================================="));
 
   Wire.begin();
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("Errore OLED"));
+    Serial.println(F("[ERRORE] Schermo OLED non trovato!"));
     while (true);
   }
 
@@ -124,32 +143,43 @@ void setup() {
   display.display();
 
   pinMode(PIN_SW, INPUT_PULLUP);
+  lastButtonState = !digitalRead(PIN_SW);
 }
 
 void loop() {
   unsigned long currentMillis = millis();
 
-  // --- Gestione cambio pagina col Pulsante
-  bool pressed = !digitalRead(PIN_SW);
-  if (pressed && (currentMillis - lastButtonPress > debounceDelay)) {
-    lastButtonPress = currentMillis;
-    paginaCorrente = (paginaCorrente + 1) % TOTALE_PAGINE;
-    
-    if (paginaCorrente == 1) {
-      enc.write(rangeGradiY * 4); 
-      vecchiaPosizioneEncoderGrafico = rangeGradiY;
+  // --- Gestione cambio pagina col Pulsante ---
+  bool currentButtonState = !digitalRead(PIN_SW); 
+  
+  if (currentButtonState && !lastButtonState) {
+    if (currentMillis - lastButtonPress > debounceDelay) {
+      lastButtonPress = currentMillis;
+      
+      int paginaPrecedente = paginaCorrente;
+      paginaCorrente = (paginaCorrente + 1) % TOTALE_PAGINE;
+      
+      Serial.print(F("[INPUT] Pulsante premuto. Transizione: Pagina "));
+      Serial.print(paginaPrecedente);
+      Serial.print(F(" -> Pagina "));
+      Serial.println(paginaCorrente);
+      
+      if (paginaCorrente == 1) {
+        enc.write(rangeGradiY * 4); 
+        vecchiaPosizioneEncoderGrafico = rangeGradiY;
+      }
+      
+      display.clearDisplay(); 
+      display.display();
     }
-    
-    display.clearDisplay(); 
-    display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK);
-    display.display();
   }
+  lastButtonState = currentButtonState; 
 
-  // --- Lettura Encoder per la Pagina 1
+  // --- Lettura Encoder ---
   long pos4x = enc.read();
   long pos1x = pos4x / 4; 
 
-  // --- Controllo Zoom in Pagina 2
+  // --- Controllo Zoom (Attivo SOLO in Pagina 1) ---
   if (paginaCorrente == 1) {
     if (pos1x != vecchiaPosizioneEncoderGrafico) {
       if (pos1x < 1) { pos1x = 1; enc.write(4); }
@@ -157,10 +187,11 @@ void loop() {
       
       rangeGradiY = pos1x;
       vecchiaPosizioneEncoderGrafico = pos1x;
+      Serial.print(F("[GRAFICO] Nuovo range zoom impostato: ")); Serial.println(rangeGradiY);
     }
   }
 
-  // --- Gestione Lettura Sensore (Ogni 2 secondi)
+  // --- Gestione Lettura Sensore (Ogni 2 secondi) ---
   if (currentMillis - previousMillisDHT >= intervalDHT) {
     previousMillisDHT = currentMillis;
     float t = dht.readTemperature();
@@ -168,12 +199,11 @@ void loop() {
     if (!isnan(t) && !isnan(h)) {
       temperaturaAttuale = t;
       umiditaAttuale = h;
-      // Calcolo dell'indice di calore (percepita) in gradi Celsius
       percepitaAttuale = dht.computeHeatIndex(t, h, false);
     }
   }
 
-  // --- Gestione Salvataggio Storico (Ogni 10 secondi)
+  // --- Gestione Salvataggio Storico (Ogni 10 secondi) ---
   if (currentMillis - previousMillisGrafico >= intervalGrafico) {
     previousMillisGrafico = currentMillis;
     if (temperaturaAttuale != 0.0) {
@@ -186,7 +216,7 @@ void loop() {
   // ========================================================
   
   if (paginaCorrente == 0) {
-    // PAGINA 1: INTERFACCIA PULITA E AGGIORNATA
+    // PAGINA 1: INTERFACCIA DATI
     display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
@@ -212,7 +242,6 @@ void loop() {
     
     display.drawFastHLine(0, 24, SCREEN_WIDTH, SSD1306_WHITE);
 
-    // Blocco Dati Sensore (Sinistra)
     display.setCursor(0, 32);
     display.print(F("Temp: "));
     display.print(temperaturaAttuale, 1); 
@@ -228,10 +257,8 @@ void loop() {
     display.print(percepitaAttuale, 1);     
     display.print(F(" C"));
 
-    // Separatore verticale interno per i dati diagnostici in basso
     display.drawFastVLine(78, 28, 36, SSD1306_WHITE);
 
-    // Info Diagnostica / Uptime (Destra)
     unsigned long secondiUp = currentMillis / 1000;
     display.setCursor(84, 36);
     display.print(F("UPTIME"));
@@ -243,7 +270,7 @@ void loop() {
     lastPos4x = pos4x; 
   }
   else if (paginaCorrente == 1) {
-    // PAGINA 2: GRAFICO (INALTERATO, FUNZIONANTE)
+    // PAGINA 2: GRAFICO
     display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
 
     if (puntiMemorizzati == 0) {
@@ -258,7 +285,6 @@ void loop() {
       
       float limiteY_Min = (float)displayMin;
       float limiteY_Max = (float)displayMax;
-
       float spazioX = 102.0 / (MAX_PUNTI - 1);
       int altezzaGraficoMax = 61; 
 
@@ -267,45 +293,118 @@ void loop() {
 
       for (int i = 0; i < puntiMemorizzati; i++) {
         int x_pixel = 26 + (int)(i * spazioX);
-        
         float percentuale = (storiciTemperatura[i] - limiteY_Min) / (limiteY_Max - limiteY_Min);
         
         if (percentuale > 1.0) percentuale = 1.0;
         if (percentuale < 0.0) percentuale = 0.0;
 
         int y_pixel = 61 - (int)(percentuale * altezzaGraficoMax);
-
         display.drawPixel(x_pixel, y_pixel, SSD1306_WHITE);
 
         if (i > 0) {
           display.drawLine(prevX, prevY, x_pixel, y_pixel, SSD1306_WHITE);
         }
-
         prevX = x_pixel;
         prevY = y_pixel;
       }
 
       display.fillRect(0, 0, 26, 64, SSD1306_BLACK); 
-
       display.drawFastVLine(26, 0, 64, SSD1306_WHITE); 
       display.drawFastHLine(26, 63, 102, SSD1306_WHITE); 
 
       display.setTextSize(1);
       display.setTextColor(SSD1306_WHITE);
-      
       display.setCursor(0, 0);   display.print(displayMax);  
       display.setCursor(0, 54);  display.print(displayMin);
-
       display.setCursor(102, 0);
       display.print(F("R:")); display.print(rangeGradiY);
 
       display.display();
     }
+  } 
+  else if (paginaCorrente == 2) {
+    // PAGINA 3: INTELLIGENZA ARTIFICIALE - EFFETTI OCCHI AVANZATI
+    display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK);
+    
+    // --- Macchina a Stati Casuale per le Animazioni delle Espressioni ---
+    if (currentMillis - tempoUltimoStatoOcchi > durataStatoOcchi) {
+      tempoUltimoStatoOcchi = currentMillis;
+      
+      int dadi = random(0, 100);
+      if (dadi < 45) {
+        statoOcchiAttuale = OCCHI_NORMALI;
+        durataStatoOcchi = random(2000, 4000);
+      } else if (dadi < 60) {
+        statoOcchiAttuale = OCCHI_BLINK;
+        durataStatoOcchi = 140; // Battito velocissimo
+      } else if (dadi < 73) {
+        statoOcchiAttuale = OCCHI_SINISTRA;
+        durataStatoOcchi = random(1500, 2500);
+      } else if (dadi < 86) {
+        statoOcchiAttuale = OCCHI_DESTRA;
+        durataStatoOcchi = random(1500, 2500);
+      } else if (dadi < 93) {
+        statoOcchiAttuale = OCCHI_FELICE;
+        durataStatoOcchi = random(2000, 3500);
+      } else {
+        statoOcchiAttuale = OCCHI_ARRABBIATO;
+        durataStatoOcchi = random(2000, 3500);
+      }
+    }
+
+    // Dimensioni di Base dell'Occhio singolo
+    int larghezzaOcchio = 36;
+    int altezzaOcchio = 38;
+    int coordinataY = 13;
+    
+    // CoordinateX di Partenza
+    int occhioSxX = 20;
+    int occhioDxX = 72;
+    int raggioAngoli = 10;
+
+    // Gestione degli sguardi (Spostamento asse X delle pupille/occhi completi)
+    if (statoOcchiAttuale == OCCHI_SINISTRA) {
+      occhioSxX -= 6;
+      occhioDxX -= 6;
+    } 
+    else if (statoOcchiAttuale == OCCHI_DESTRA) {
+      occhioSxX += 6;
+      occhioDxX += 6;
+    }
+
+    // --- DISEGNO EFFETTIVO DELLE ESPRESSIONI ---
+    if (statoOcchiAttuale == OCCHI_BLINK) {
+      // Sguardo Chiuso / Linea sottile
+      display.fillRect(occhioSxX, 30, larghezzaOcchio, 6, SSD1306_WHITE);
+      display.fillRect(occhioDxX, 30, larghezzaOcchio, 6, SSD1306_WHITE);
+    } 
+    else {
+      // Disegna le due forme base arrotondate
+      display.fillRoundRect(occhioSxX, coordinataY, larghezzaOcchio, altezzaOcchio, raggioAngoli, SSD1306_WHITE);
+      display.fillRoundRect(occhioDxX, coordinataY, larghezzaOcchio, altezzaOcchio, raggioAngoli, SSD1306_WHITE);
+
+      // Sottrazione geometrica basata sulle emozioni
+      if (statoOcchiAttuale == OCCHI_FELICE) {
+        // Copre la metà inferiore con dei rettangoli neri, tagliandoli a mezzaluna piatta
+        display.fillRect(occhioSxX, coordinataY + 22, larghezzaOcchio, 18, SSD1306_BLACK);
+        display.fillRect(occhioDxX, coordinataY + 22, larghezzaOcchio, 18, SSD1306_BLACK);
+      } 
+      else if (statoOcchiAttuale == OCCHI_ARRABBIATO) {
+        // Taglia gli angoli superiori interni simulando le sopracciglia inclinate verso il centro
+        // Occhio Sinistro: Triangolo nero nell'angolo in alto a destra dell'occhio
+        display.fillTriangle(occhioSxX + larghezzaOcchio - 16, coordinataY, 
+                             occhioSxX + larghezzaOcchio, coordinataY, 
+                             occhioSxX + larghezzaOcchio, coordinataY + 14, SSD1306_BLACK);
+                             
+        // Occhio Destro: Triangolo nero nell'angolo in alto a sinistra dell'occhio
+        display.fillTriangle(occhioDxX, coordinataY, 
+                             occhioDxX + 16, coordinataY, 
+                             occhioDxX, coordinataY + 14, SSD1306_BLACK);
+      }
+    }
+
+    display.display();
   }
 
-  if (paginaCorrente == 0) {
-    delay(33); 
-  } else {
-    delay(1);
-  }
+  delay(10); 
 }

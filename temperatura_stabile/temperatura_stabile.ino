@@ -25,20 +25,23 @@ long lastPos1x = 0;
 unsigned long lastButtonPress = 0;
 const unsigned long debounceDelay = 250; 
 
-// --- VARIABILE PER GESTIONE PAGINE ---
-int paginaCorrente = 0; 
-const int TOTALE_PAGINE = 2;
+// Stato del pulsante per logica di rilascio
+bool lastButtonState = false; 
 
-// --- MEMORIZZAZIONE DATI GRAFICO AUMENTATA A 50 PUNTI ---
+// --- GESTIONE PAGINE ---
+int paginaCorrente = 0; 
+const int TOTALE_PAGINE = 3; 
+
+// --- MEMORIZZAZIONE DATI GRAFICO ---
 const int MAX_PUNTI = 50; 
 float storiciTemperatura[MAX_PUNTI];
 int puntiMemorizzati = 0;
 
 float temperaturaAttuale = 0.0;
 float umiditaAttuale = 0.0;
-float percepitaAttuale = 0.0; // Nuova variabile per la temperatura percepita
+float percepitaAttuale = 0.0; 
 
-// --- GESTIONE ZOOM INTERATTIVO BILANCIATO ---
+// --- GESTIONE ZOOM INTERATTIVO ---
 int rangeGradiY = 10; 
 long vecchiaPosizioneEncoderGrafico = 0;
 
@@ -47,7 +50,27 @@ unsigned long previousMillisDHT = 0;
 const long intervalDHT = 2000; 
 
 unsigned long previousMillisGrafico = 0;
-const long intervalGrafico = 10000; // 10 secondi
+const long intervalGrafico = 10000; 
+
+// --- ARRAY BITMAP PER ANIMAZIONE ANIMALETTO (PROGMEM) ---
+const uint8_t alieno_frame1[] PROGMEM = {
+  0x03, 0xc0, 0x07, 0xe0, 0x0f, 0xf0, 0x1f, 0xf8, 0x1f, 0xf8, 0x0f, 0xf0, 0x03, 0xc0, 0x07, 0xe0,
+  0x0f, 0xf0, 0x1f, 0xf8, 0x3f, 0xfc, 0x7f, 0xfe, 0x67, 0xe6, 0x43, 0xc2, 0x01, 0x80, 0x03, 0xc0
+};
+
+const uint8_t alieno_frame2[] PROGMEM = {
+  0x03, 0xc0, 0x07, 0xe0, 0x0f, 0xf0, 0x1f, 0xf8, 0x1f, 0xf8, 0x0f, 0xf0, 0x03, 0xc0, 0x07, 0xe0,
+  0x0f, 0xf0, 0x1f, 0xf8, 0x3f, 0xfc, 0x7f, 0xfe, 0x3f, 0xfc, 0x1c, 0x38, 0x08, 0x10, 0x18, 0x18
+};
+
+// Variabili per l'animazione dell'animaletto
+unsigned long previousMillisAnimazione = 0;
+int frameAttuale = 0;
+int petX = 56; 
+int petY = 24; 
+
+int displayMin = 0;
+int displayMax = 0;
 
 int getRamLibera() {
   extern int __heap_start, *__brkval;
@@ -66,10 +89,6 @@ void aggiungiDatoGrafico(float nuovaTemp) {
     storiciTemperatura[MAX_PUNTI - 1] = nuovaTemp;
   }
 }
-
-// Variabili globali per memorizzare i limiti attuali
-int displayMin = 0;
-int displayMax = 0;
 
 void calcolaLimitiSmart(float* buffer, int nPunti, int rangeY, float lastVal) {
   int minOccupato = (int)floor(lastVal);
@@ -106,11 +125,17 @@ void calcolaLimitiSmart(float* buffer, int nPunti, int rangeY, float lastVal) {
 
 void setup() {
   Serial.begin(9600);
-  delay(2000);
+  delay(1000); 
+
+  // LOG DI AVVIO SULLA SERIALE
+  Serial.println(F("====================================="));
+  Serial.println(F("[SISTEMA] Arduino avviato correttamente!"));
+  Serial.print(F("[INFO] Pagine totali configurate: ")); Serial.println(TOTALE_PAGINE);
+  Serial.println(F("====================================="));
 
   Wire.begin();
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("Errore OLED"));
+    Serial.println(F("[ERRORE] Schermo OLED non trovato!"));
     while (true);
   }
 
@@ -124,32 +149,47 @@ void setup() {
   display.display();
 
   pinMode(PIN_SW, INPUT_PULLUP);
+  
+  // Sincronizza lo stato iniziale del pulsante
+  lastButtonState = !digitalRead(PIN_SW);
 }
 
 void loop() {
   unsigned long currentMillis = millis();
 
-  // --- Gestione cambio pagina col Pulsante
-  bool pressed = !digitalRead(PIN_SW);
-  if (pressed && (currentMillis - lastButtonPress > debounceDelay)) {
-    lastButtonPress = currentMillis;
-    paginaCorrente = (paginaCorrente + 1) % TOTALE_PAGINE;
-    
-    if (paginaCorrente == 1) {
-      enc.write(rangeGradiY * 4); 
-      vecchiaPosizioneEncoderGrafico = rangeGradiY;
+  // --- Gestione cambio pagina col Pulsante (Migliorata con logica di rilascio) ---
+  bool currentButtonState = !digitalRead(PIN_SW); // true se premuto
+  
+  if (currentButtonState && !lastButtonState) {
+    // Il pulsante è appena stato premuto (fronte di salita)
+    if (currentMillis - lastButtonPress > debounceDelay) {
+      lastButtonPress = currentMillis;
+      
+      int paginaPrecedente = paginaCorrente;
+      paginaCorrente = (paginaCorrente + 1) % TOTALE_PAGINE;
+      
+      // LOG SERIALE DEL CLICK
+      Serial.print(F("[INPUT] Pulsante premuto. Transizione: Pagina "));
+      Serial.print(paginaPrecedente);
+      Serial.print(F(" -> Pagina "));
+      Serial.println(paginaCorrente);
+      
+      if (paginaCorrente == 1) {
+        enc.write(rangeGradiY * 4); 
+        vecchiaPosizioneEncoderGrafico = rangeGradiY;
+      }
+      
+      display.clearDisplay(); 
+      display.display();
     }
-    
-    display.clearDisplay(); 
-    display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK);
-    display.display();
   }
+  lastButtonState = currentButtonState; // Aggiorna lo stato per il prossimo ciclo
 
-  // --- Lettura Encoder per la Pagina 1
+  // --- Lettura Encoder ---
   long pos4x = enc.read();
   long pos1x = pos4x / 4; 
 
-  // --- Controllo Zoom in Pagina 2
+  // --- Controllo Zoom (Attivo SOLO in Pagina 1) ---
   if (paginaCorrente == 1) {
     if (pos1x != vecchiaPosizioneEncoderGrafico) {
       if (pos1x < 1) { pos1x = 1; enc.write(4); }
@@ -157,10 +197,11 @@ void loop() {
       
       rangeGradiY = pos1x;
       vecchiaPosizioneEncoderGrafico = pos1x;
+      Serial.print(F("[GRAFICO] Nuovo range zoom impostato: ")); Serial.println(rangeGradiY);
     }
   }
 
-  // --- Gestione Lettura Sensore (Ogni 2 secondi)
+  // --- Gestione Lettura Sensore (Ogni 2 secondi) ---
   if (currentMillis - previousMillisDHT >= intervalDHT) {
     previousMillisDHT = currentMillis;
     float t = dht.readTemperature();
@@ -168,12 +209,11 @@ void loop() {
     if (!isnan(t) && !isnan(h)) {
       temperaturaAttuale = t;
       umiditaAttuale = h;
-      // Calcolo dell'indice di calore (percepita) in gradi Celsius
       percepitaAttuale = dht.computeHeatIndex(t, h, false);
     }
   }
 
-  // --- Gestione Salvataggio Storico (Ogni 10 secondi)
+  // --- Gestione Salvataggio Storico (Ogni 10 secondi) ---
   if (currentMillis - previousMillisGrafico >= intervalGrafico) {
     previousMillisGrafico = currentMillis;
     if (temperaturaAttuale != 0.0) {
@@ -186,7 +226,7 @@ void loop() {
   // ========================================================
   
   if (paginaCorrente == 0) {
-    // PAGINA 1: INTERFACCIA PULITA E AGGIORNATA
+    // PAGINA 1: INTERFACCIA DATI
     display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
@@ -212,7 +252,6 @@ void loop() {
     
     display.drawFastHLine(0, 24, SCREEN_WIDTH, SSD1306_WHITE);
 
-    // Blocco Dati Sensore (Sinistra)
     display.setCursor(0, 32);
     display.print(F("Temp: "));
     display.print(temperaturaAttuale, 1); 
@@ -228,10 +267,8 @@ void loop() {
     display.print(percepitaAttuale, 1);     
     display.print(F(" C"));
 
-    // Separatore verticale interno per i dati diagnostici in basso
     display.drawFastVLine(78, 28, 36, SSD1306_WHITE);
 
-    // Info Diagnostica / Uptime (Destra)
     unsigned long secondiUp = currentMillis / 1000;
     display.setCursor(84, 36);
     display.print(F("UPTIME"));
@@ -243,7 +280,7 @@ void loop() {
     lastPos4x = pos4x; 
   }
   else if (paginaCorrente == 1) {
-    // PAGINA 2: GRAFICO (INALTERATO, FUNZIONANTE)
+    // PAGINA 2: GRAFICO
     display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
 
     if (puntiMemorizzati == 0) {
@@ -254,7 +291,7 @@ void loop() {
       display.display();
     } 
     else {
-      calcolaLimitiSmart(storiciTemperatura, puntiMemorizzati, rangeGradiY, storiciTemperatura[puntiMemorizzati - 1]);
+      calcolaLimitiSmart(storiciTemperatura, puntiMemorizzati, rangeGradiY, storiciTemperatura[pUNTI_mEMORIZZATI - 1]);
       
       float limiteY_Min = (float)displayMin;
       float limiteY_Max = (float)displayMax;
@@ -301,11 +338,41 @@ void loop() {
 
       display.display();
     }
+  } 
+  else if (paginaCorrente == 2) {
+    // PAGINA 3: ARDU-PET ANIMATO
+    display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK);
+    
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.print(F("PAG 3: ARDU-PET"));
+    display.drawFastHLine(0, 10, SCREEN_WIDTH, SSD1306_WHITE);
+
+    // Animazione dell'animaletto
+    if (currentMillis - previousMillisAnimazione >= 250) {
+      previousMillisAnimazione = currentMillis;
+      frameAttuale = (frameAttuale + 1) % 2; 
+      
+      petX += random(-3, 4); 
+      if (petX < 5) petX = 5;
+      if (petX > 105) petX = 105;
+    }
+
+    if (frameAttuale == 0) {
+      display.drawBitmap(petX, petY, alieno_frame1, 16, 16, SSD1306_WHITE);
+    } else {
+      display.drawBitmap(petX, petY, alieno_frame2, 16, 16, SSD1306_WHITE);
+    }
+
+    // Terreno fisso
+    display.drawFastHLine(0, 60, SCREEN_WIDTH, SSD1306_WHITE);
+    for(int i = 0; i < 128; i += 8) {
+      display.drawLine(i, 60, i + 2, 57, SSD1306_WHITE);
+    }
+
+    display.display();
   }
 
-  if (paginaCorrente == 0) {
-    delay(33); 
-  } else {
-    delay(1);
-  }
+  delay(10); 
 }
