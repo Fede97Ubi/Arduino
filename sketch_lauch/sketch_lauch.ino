@@ -66,6 +66,52 @@ void aggiungiDatoGrafico(float nuovaTemp) {
   }
 }
 
+// Variabili globali per memorizzare i limiti attuali
+int displayMin = 0;
+int displayMax = 0;
+
+void calcolaLimitiSmart(float* buffer, int nPunti, int rangeY, float lastVal) {
+	// 1. Inizializziamo il range minimo necessario con l'ultimo valore
+	// Un 21.1 occupa da 21 a 22 (floor e ceil)
+	int minOccupato = (int)floor(lastVal);
+	int maxOccupato = (int)ceil(lastVal);
+
+	// 2. Andiamo a ritroso nel buffer
+	for (int i = nPunti - 2; i >= 0; i--) {
+			float val = buffer[i];
+			int valMin = (int)floor(val);
+			int valMax = (int)ceil(val);
+
+			// Calcoliamo come cambierebbe il range includendo questo nuovo punto
+			int newMin = min(minOccupato, valMin);
+			int newMax = max(maxOccupato, valMax);
+
+			// Se l'ingombro totale entra nel rangeGradiY, lo includiamo
+			if ((newMax - newMin) <= rangeY) {
+					minOccupato = newMin;
+					maxOccupato = newMax;
+			} else {
+					// Se sforiamo, ci fermiamo: questo punto (e tutti i precedenti) sono esclusi
+					break;
+			}
+	}
+
+	// 3. Ora abbiamo il range "stretto". Espandiamolo per occupare tutto rangeY
+	int spanAttuale = maxOccupato - minOccupato;
+	int espansioneNecessaria = rangeY - spanAttuale;
+
+	if (espansioneNecessaria > 0) {
+			// Espandiamo simmetricamente (o quanto possibile)
+			int metaEspansione = espansioneNecessaria / 2;
+			minOccupato -= metaEspansione;
+			maxOccupato = minOccupato + rangeY;
+	}
+
+	// Salviamo per il rendering
+	displayMin = minOccupato;
+	displayMax = maxOccupato;
+}
+
 void setup() {
   Serial.begin(9600);
   delay(2000);
@@ -197,23 +243,12 @@ void loop() {
       display.display();
     } 
     else {
-      float somma = 0.0;
-      for (int i = 0; i < puntiMemorizzati; i++) {
-        somma += storiciTemperatura[i];
-      }
-      
-      float mediaDati = somma / (float)puntiMemorizzati;
-      
-      int centroIntero = (int)mediaDati;
-
-      int metaSotto = rangeGradiY / 2;
-      int metaSopra = rangeGradiY - metaSotto; 
-
-      int tempMinIntera = centroIntero - metaSotto;
-      int tempMaxIntera = centroIntero + metaSopra;
-
-      float limiteY_Min = (float)tempMinIntera;
-      float limiteY_Max = (float)tempMaxIntera;
+			// Passiamo tutto l'array, quanti punti abbiamo, il range dell'encoder e l'ultimo valore
+			calcolaLimitiSmart(storiciTemperatura, puntiMemorizzati, rangeGradiY, storiciTemperatura[puntiMemorizzati - 1]);
+			
+			// Ora usa displayMin e displayMax per il rendering
+			float limiteY_Min = (float)displayMin;
+			float limiteY_Max = (float)displayMax;
 
       float spazioX = 102.0 / (MAX_PUNTI - 1);
       int altezzaGraficoMax = 61; 
@@ -248,9 +283,9 @@ void loop() {
 
       display.setTextSize(1);
       display.setTextColor(SSD1306_WHITE);
-      
-      display.setCursor(0, 0);   display.print(tempMaxIntera);  
-      display.setCursor(0, 54);  display.print(tempMinIntera);  
+			
+      display.setCursor(0, 0);   display.print(displayMax);  
+    	display.setCursor(0, 54);  display.print(displayMin);
 
       display.setCursor(102, 0);
       display.print(F("R:")); display.print(rangeGradiY);
