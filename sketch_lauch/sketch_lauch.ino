@@ -16,7 +16,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 // Pin e Tipo DHT (Termometro)
 #define DHTPIN 5      
 #define DHTTYPE DHT11 
-DHT dht(DHTPIN, DHTTYPE);
+DHT dht_real(DHTPIN, DHTTYPE); 
 
 Encoder enc(PIN_CLK, PIN_DT);
 
@@ -33,7 +33,7 @@ int paginaCorrente = 0;
 const int TOTALE_PAGINE = 3; 
 
 // --- MEMORIZZAZIONE DATI GRAFICO ---
-const int MAX_PUNTI = 50; 
+const int MAX_PUNTI = 40; 
 float storiciTemperatura[MAX_PUNTI];
 int puntiMemorizzati = 0;
 
@@ -66,6 +66,14 @@ unsigned long durataStatoOcchi = 2000;
 
 int displayMin = 0;
 int displayMax = 0;
+
+// --- VARIABILI MOTORE ANIMAZIONE SCATTANTE ---
+int8_t cX = 0;       // Posizione X Corrente
+int8_t cY = 0;       // Posizione Y Corrente
+int8_t cW = 36;      // Larghezza Corrente
+int8_t cH = 38;      // Altezza Corrente
+int8_t cMask = 0;    // Altezza Maschera Felicità
+int8_t cAngry = 0;   // Inclinazione Sopracciglia Rabbia
 
 int getRamLibera() {
   extern int __heap_start, *__brkval;
@@ -119,21 +127,15 @@ void calcolaLimitiSmart(float* buffer, int nPunti, int rangeY, float lastVal) {
 }
 
 void setup() {
-  Serial.begin(9600);
-  delay(1000); 
-
-  Serial.println(F("====================================="));
-  Serial.println(F("[SISTEMA] Arduino avviato correttamente!"));
-  Serial.print(F("[INFO] Pagine totali configurate: ")); Serial.println(TOTALE_PAGINE);
-  Serial.println(F("====================================="));
+  // SERIALE RIMOSSO: Libera circa 160 Byte di RAM! Fine dei pixel fantasma.
+  delay(500); 
 
   Wire.begin();
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("[ERRORE] Schermo OLED non trovato!"));
-    while (true);
+    while (true); // Se lo schermo non si avvia, blocca tutto.
   }
 
-  dht.begin();
+  dht_real.begin();
 
   for (int i = 0; i < MAX_PUNTI; i++) {
     storiciTemperatura[i] = 0.0;
@@ -156,13 +158,7 @@ void loop() {
     if (currentMillis - lastButtonPress > debounceDelay) {
       lastButtonPress = currentMillis;
       
-      int paginaPrecedente = paginaCorrente;
       paginaCorrente = (paginaCorrente + 1) % TOTALE_PAGINE;
-      
-      Serial.print(F("[INPUT] Pulsante premuto. Transizione: Pagina "));
-      Serial.print(paginaPrecedente);
-      Serial.print(F(" -> Pagina "));
-      Serial.println(paginaCorrente);
       
       if (paginaCorrente == 1) {
         enc.write(rangeGradiY * 4); 
@@ -187,23 +183,22 @@ void loop() {
       
       rangeGradiY = pos1x;
       vecchiaPosizioneEncoderGrafico = pos1x;
-      Serial.print(F("[GRAFICO] Nuovo range zoom impostato: ")); Serial.println(rangeGradiY);
     }
   }
 
-  // --- Gestione Lettura Sensore (Ogni 2 secondi) ---
+  // --- Gestione Lettura Sensore ---
   if (currentMillis - previousMillisDHT >= intervalDHT) {
     previousMillisDHT = currentMillis;
-    float t = dht.readTemperature();
-    float h = dht.readHumidity();
+    float t = dht_real.readTemperature();
+    float h = dht_real.readHumidity();
     if (!isnan(t) && !isnan(h)) {
       temperaturaAttuale = t;
       umiditaAttuale = h;
-      percepitaAttuale = dht.computeHeatIndex(t, h, false);
+      percepitaAttuale = dht_real.computeHeatIndex(t, h, false);
     }
   }
 
-  // --- Gestione Salvataggio Storico (Ogni 10 secondi) ---
+  // --- Salvataggio Grafico ---
   if (currentMillis - previousMillisGrafico >= intervalGrafico) {
     previousMillisGrafico = currentMillis;
     if (temperaturaAttuale != 0.0) {
@@ -216,7 +211,6 @@ void loop() {
   // ========================================================
   
   if (paginaCorrente == 0) {
-    // PAGINA 1: INTERFACCIA DATI
     display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
@@ -228,17 +222,13 @@ void loop() {
     
     display.drawFastVLine(64, 0, 22, SSD1306_WHITE);
 
-    int ramLibera = getRamLibera();
-    int ramTotale = 2048; 
-    int ramOccupata = ramTotale - ramLibera;
+    int ramOccupata = 2048 - getRamLibera();
 
     display.setCursor(68, 0);
     display.print(F("RAM:"));
     display.setCursor(68, 12);
     display.print(ramOccupata);
-    display.print(F("/"));
-    display.print(ramTotale);
-    display.print(F("B"));
+    display.print(F("/2048B"));
     
     display.drawFastHLine(0, 24, SCREEN_WIDTH, SSD1306_WHITE);
 
@@ -259,18 +249,16 @@ void loop() {
 
     display.drawFastVLine(78, 28, 36, SSD1306_WHITE);
 
-    unsigned long secondiUp = currentMillis / 1000;
     display.setCursor(84, 36);
     display.print(F("UPTIME"));
     display.setCursor(84, 48);
-    display.print(secondiUp);
+    display.print(currentMillis / 1000);
     display.print(F("s"));
     
     display.display(); 
     lastPos4x = pos4x; 
   }
   else if (paginaCorrente == 1) {
-    // PAGINA 2: GRAFICO
     display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK); 
 
     if (puntiMemorizzati == 0) {
@@ -288,8 +276,7 @@ void loop() {
       float spazioX = 102.0 / (MAX_PUNTI - 1);
       int altezzaGraficoMax = 61; 
 
-      int prevX = 0;
-      int prevY = 0;
+      int prevX = 0, prevY = 0;
 
       for (int i = 0; i < puntiMemorizzati; i++) {
         int x_pixel = 26 + (int)(i * spazioX);
@@ -301,11 +288,8 @@ void loop() {
         int y_pixel = 61 - (int)(percentuale * altezzaGraficoMax);
         display.drawPixel(x_pixel, y_pixel, SSD1306_WHITE);
 
-        if (i > 0) {
-          display.drawLine(prevX, prevY, x_pixel, y_pixel, SSD1306_WHITE);
-        }
-        prevX = x_pixel;
-        prevY = y_pixel;
+        if (i > 0) display.drawLine(prevX, prevY, x_pixel, y_pixel, SSD1306_WHITE);
+        prevX = x_pixel; prevY = y_pixel;
       }
 
       display.fillRect(0, 0, 26, 64, SSD1306_BLACK); 
@@ -316,17 +300,15 @@ void loop() {
       display.setTextColor(SSD1306_WHITE);
       display.setCursor(0, 0);   display.print(displayMax);  
       display.setCursor(0, 54);  display.print(displayMin);
-      display.setCursor(102, 0);
-      display.print(F("R:")); display.print(rangeGradiY);
+      display.setCursor(102, 0); display.print(F("R:")); display.print(rangeGradiY);
 
       display.display();
     }
   } 
   else if (paginaCorrente == 2) {
-    // PAGINA 3: INTELLIGENZA ARTIFICIALE - EFFETTI OCCHI AVANZATI
     display.fillRect(0, 0, SCREEN_WIDTH, 64, SSD1306_BLACK);
     
-    // --- Macchina a Stati Casuale per le Animazioni delle Espressioni ---
+    // --- Scelta Casuale Espressione ---
     if (currentMillis - tempoUltimoStatoOcchi > durataStatoOcchi) {
       tempoUltimoStatoOcchi = currentMillis;
       
@@ -336,7 +318,7 @@ void loop() {
         durataStatoOcchi = random(2000, 4000);
       } else if (dadi < 60) {
         statoOcchiAttuale = OCCHI_BLINK;
-        durataStatoOcchi = 140; // Battito velocissimo
+        durataStatoOcchi = 140; 
       } else if (dadi < 73) {
         statoOcchiAttuale = OCCHI_SINISTRA;
         durataStatoOcchi = random(1500, 2500);
@@ -352,55 +334,67 @@ void loop() {
       }
     }
 
-    // Dimensioni di Base dell'Occhio singolo
-    int larghezzaOcchio = 36;
-    int altezzaOcchio = 38;
-    int coordinataY = 13;
-    
-    // CoordinateX di Partenza
-    int occhioSxX = 20;
-    int occhioDxX = 72;
-    int raggioAngoli = 10;
+    // Parametri Obiettivo da raggiungere
+    int8_t tX = 0, tY = 0, tW = 36, tH = 38, tMask = 0, tAngry = 0;
 
-    // Gestione degli sguardi (Spostamento asse X delle pupille/occhi completi)
-    if (statoOcchiAttuale == OCCHI_SINISTRA) {
-      occhioSxX -= 6;
-      occhioDxX -= 6;
-    } 
-    else if (statoOcchiAttuale == OCCHI_DESTRA) {
-      occhioSxX += 6;
-      occhioDxX += 6;
+    // Sguardo laterale AUMENTATO (-18 e +18 invece di 8)
+    if (statoOcchiAttuale == OCCHI_SINISTRA)        { tX = -18; }
+    else if (statoOcchiAttuale == OCCHI_DESTRA)     { tX = 18; }
+    else if (statoOcchiAttuale == OCCHI_BLINK)      { tH = 2; }
+    else if (statoOcchiAttuale == OCCHI_FELICE)     { tMask = 18; }
+    // Rabbia introdotta: scendono le sopracciglia (14px) e l'occhio guarda giù (+3px)
+    else if (statoOcchiAttuale == OCCHI_ARRABBIATO) { tAngry = 16; tY = 3; }
+
+    // --- MOTORE INTERPOLAZIONE: MOLTO PIÙ SCATTANTE E VELOCE ---
+    
+    // Spostamento X (Destra / Sinistra) -> Passo da 6
+    if (cX < tX) { cX += 6; if (cX > tX) cX = tX; }
+    else if (cX > tX) { cX -= 6; if (cX < tX) cX = tX; }
+
+    // Spostamento Y -> Passo da 3
+    if (cY < tY) { cY += 3; if (cY > tY) cY = tY; }
+    else if (cY > tY) { cY -= 3; if (cY < tY) cY = tY; }
+
+    // Maschera del Sorriso -> Passo raddoppiato (8), sale subito
+    if (cMask < tMask) { cMask += 8; if (cMask > tMask) cMask = tMask; }
+    else if (cMask > tMask) { cMask -= 8; if (cMask < tMask) cMask = tMask; }
+
+    // Maschera della Rabbia (Sopracciglia) -> Calano subito
+    if (cAngry < tAngry) { cAngry += 8; if (cAngry > tAngry) cAngry = tAngry; }
+    else if (cAngry > tAngry) { cAngry -= 8; if (cAngry < tAngry) cAngry = tAngry; }
+
+    // Battito ciglia -> Istantaneo
+    int8_t diffH = tH - cH;
+    if (diffH != 0) {
+      if (abs(diffH) > 10) cH += (diffH > 0) ? 12 : -12;
+      else                 cH += (diffH > 0) ? 3 : -3;
     }
 
-    // --- DISEGNO EFFETTIVO DELLE ESPRESSIONI ---
-    if (statoOcchiAttuale == OCCHI_BLINK) {
-      // Sguardo Chiuso / Linea sottile
-      display.fillRect(occhioSxX, 30, larghezzaOcchio, 6, SSD1306_WHITE);
-      display.fillRect(occhioDxX, 30, larghezzaOcchio, 6, SSD1306_WHITE);
-    } 
-    else {
-      // Disegna le due forme base arrotondate
-      display.fillRoundRect(occhioSxX, coordinataY, larghezzaOcchio, altezzaOcchio, raggioAngoli, SSD1306_WHITE);
-      display.fillRoundRect(occhioDxX, coordinataY, larghezzaOcchio, altezzaOcchio, raggioAngoli, SSD1306_WHITE);
+    // --- DISEGNO ---
+    int posY_Occhi = 32 - (cH / 2) + cY;
+    int posX_Sinistro = 20 + cX;
+    int posX_Destro = 72 + cX;
+    int raggioAngoli = (cH < 20) ? cH / 2 : 10;
 
-      // Sottrazione geometrica basata sulle emozioni
-      if (statoOcchiAttuale == OCCHI_FELICE) {
-        // Copre la metà inferiore con dei rettangoli neri, tagliandoli a mezzaluna piatta
-        display.fillRect(occhioSxX, coordinataY + 22, larghezzaOcchio, 18, SSD1306_BLACK);
-        display.fillRect(occhioDxX, coordinataY + 22, larghezzaOcchio, 18, SSD1306_BLACK);
-      } 
-      else if (statoOcchiAttuale == OCCHI_ARRABBIATO) {
-        // Taglia gli angoli superiori interni simulando le sopracciglia inclinate verso il centro
-        // Occhio Sinistro: Triangolo nero nell'angolo in alto a destra dell'occhio
-        display.fillTriangle(occhioSxX + larghezzaOcchio - 16, coordinataY, 
-                             occhioSxX + larghezzaOcchio, coordinataY, 
-                             occhioSxX + larghezzaOcchio, coordinataY + 14, SSD1306_BLACK);
-                             
-        // Occhio Destro: Triangolo nero nell'angolo in alto a sinistra dell'occhio
-        display.fillTriangle(occhioDxX, coordinataY, 
-                             occhioDxX + 16, coordinataY, 
-                             occhioDxX, coordinataY + 14, SSD1306_BLACK);
-      }
+    // Occhi Base
+    display.fillRoundRect(posX_Sinistro, posY_Occhi, cW, cH, raggioAngoli, SSD1306_WHITE);
+    display.fillRoundRect(posX_Destro, posY_Occhi, cW, cH, raggioAngoli, SSD1306_WHITE);
+
+    // Sorriso (Taglio dal basso verso l'alto)
+    if (cMask > 0) {
+      display.fillRect(posX_Sinistro, posY_Occhi + cH - cMask, cW, cMask, SSD1306_BLACK);
+      display.fillRect(posX_Destro, posY_Occhi + cH - cMask, cW, cMask, SSD1306_BLACK);
+    } 
+
+    // Rabbia Animata (I triangoli scendono con la variabile cAngry)
+    if (cAngry > 0) {
+      display.fillTriangle(posX_Sinistro + cW - 16, posY_Occhi, 
+                           posX_Sinistro + cW, posY_Occhi, 
+                           posX_Sinistro + cW, posY_Occhi + cAngry, SSD1306_BLACK);
+                           
+      display.fillTriangle(posX_Destro, posY_Occhi, 
+                           posX_Destro + 16, posY_Occhi, 
+                           posX_Destro, posY_Occhi + cAngry, SSD1306_BLACK);
     }
 
     display.display();
